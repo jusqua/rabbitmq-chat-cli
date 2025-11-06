@@ -2,58 +2,116 @@ package br.ufs.dcomp.ChatRabbitMQ;
 
 import com.rabbitmq.client.*;
 
-import java.util.Scanner;
-
+import org.jline.reader.LineReaderBuilder;
+import org.jline.terminal.TerminalBuilder;
 import java.io.IOException;
 
 public class Chat {
-
   public static void main(String[] argv) throws Exception {
-    ConnectionFactory factory = new ConnectionFactory();
-    factory.setHost("13.218.246.166");
-    factory.setUsername("admin");
-    Scanner sc = new Scanner(System.in);
-    factory.setPassword("password");
-    factory.setVirtualHost("/");
-    Connection connection = factory.newConnection();
-    Channel channel = connection.createChannel();
-    String usuario = "";
-    String destinatario = "";
-    
-      
-    System.out.print("\033[H\033[2J");
-    System.out.print("User:");
-    usuario = sc.nextLine();
-    System.out.println(usuario);
-    
-    channel.queueDeclare(usuario, false,   false,     false,       null);
-    
-    Consumer consumer = new DefaultConsumer(channel) {
-      public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body)           throws IOException {
+    var terminal = TerminalBuilder.terminal();
+    var reader = LineReaderBuilder.builder().terminal(terminal).build();
 
-        String message = new String(body, "UTF-8");
+    var currentUser = "";
+    var currentDestinatary = "";
 
+    while (currentUser.isBlank()) {
+      try {
+        currentUser = reader.readLine("User: ");
+      } catch (final Exception e) {
+        System.out.println("Exited");
+        return;
       }
-    };
-    channel.basicConsume(usuario, true, consumer);
-    
-    
-    Integer i = 0; 
-    
-    while (i == 0){
-      System.out.print("\033[H\033[2J");
-      System.out.print("<<");
-      String destinatario_parcial = sc.nextLine();
-      if (destinatario_parcial.charAt(0) == '@'){
-        System.out.print("\033[H\033[2J");
-        i = 1;
-        destinatario = destinatario_parcial.substring(1);
-      }else{
-        System.out.println("Digite o destinatário no seguinte formato: @userdodestinatario");
-      }
-    
     }
-    System.out.println(destinatario);
 
+    var factory = new ConnectionFactory();
+    factory.setHost("localhost");
+
+    var connection = factory.newConnection();
+    var channel = connection.createChannel();
+
+    channel.queueDeclare(currentUser, false, false, false, null);
+    channel.basicConsume(currentUser, true,
+        new DefaultConsumer(channel) {
+          public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties,
+              byte[] body) {
+            try {
+              var message = Message.fromBytes(body);
+              reader.printAbove(message.toString());
+            } catch (final Exception e) {
+              e.printStackTrace();
+            }
+          }
+        });
+
+    String prompt;
+    while (true) {
+      try {
+        prompt = reader.readLine((currentDestinatary.isBlank() ? "" : ("@" + currentDestinatary)) + "<< ");
+      } catch (final Exception e) {
+        System.out.println("Logged out");
+        break;
+      }
+
+      if (prompt.isBlank())
+        continue;
+
+      if (prompt.charAt(0) == '!') {
+        var command = prompt.substring(1).trim();
+        if (command.isBlank()) {
+          System.out.println("No command provided");
+        } else if (command.equals("help")) {
+          System.out.println("--- Set destinatary for current user ---");
+          System.out.println("@<destinatary>");
+          System.out.println();
+          System.out.println("--- Commands ---");
+          System.out.println("!help\tDisplay help");
+          System.out.println("!exit\tEnd program");
+        } else if (command.equals("exit")) {
+          System.out.println("Logged out");
+          break;
+        } else {
+          System.out.println(String.format("\"%s\" is not in list of available commands", command));
+        }
+        continue;
+      }
+
+      if (prompt.charAt(0) == '@') {
+        var destinatary = prompt.substring(1).trim();
+        if (destinatary.isBlank()) {
+          System.out.println("No destinatary provided");
+        } else if (destinatary.equals(currentUser)) {
+          System.out.println("Destinatary cannot be yourself");
+        } else {
+          try {
+            var tmp = connection.createChannel();
+            tmp.queueDeclarePassive(destinatary);
+            currentDestinatary = destinatary;
+            tmp.close();
+          } catch (Exception e) {
+            System.out.println("Destinatary does not exist");
+          }
+        }
+        continue;
+      }
+
+      if (currentDestinatary.isBlank()) {
+        System.out.println("Use @<destinatary> to set a destinatary");
+        continue;
+      }
+
+      sendMessage(channel, currentDestinatary, currentUser, prompt);
+    }
+
+    connection.close();
+  }
+
+  public static void sendMessage(Channel channel, String destinatary, String sender, String content) {
+    try {
+      var message = new Message(content, sender);
+      var messageBytes = Message.toBytes(message);
+      channel.basicPublish("", destinatary, null, messageBytes);
+    } catch (final IOException exception) {
+      System.err.println("An error occurred while sending the message: " + exception.getMessage());
+    }
   }
 }
