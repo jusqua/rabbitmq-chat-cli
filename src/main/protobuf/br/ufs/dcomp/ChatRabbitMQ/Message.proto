@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "br.ufs.dcomp";
+option java_outer_classname = "MessageProtobuf";
+
+message Message {
+  string datetime = 1;
+  string sender = 2;
+  bytes body = 3;
+  optional string type = 4;
+  optional string filename = 5;
+  optional string group = 6;
+}

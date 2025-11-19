@@ -1,12 +1,18 @@
 package br.ufs.dcomp.ChatRabbitMQ;
 
+import br.ufs.dcomp.Message;
+import com.google.protobuf.ByteString;
 import com.rabbitmq.client.*;
-
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.terminal.TerminalBuilder;
-import java.io.IOException;
 
 public class Chat {
+
   public static void main(String[] argv) throws Exception {
     var terminal = TerminalBuilder.terminal();
     var reader = LineReaderBuilder.builder().terminal(terminal).build();
@@ -30,30 +36,38 @@ public class Chat {
     var channel = connection.createChannel();
 
     channel.queueDeclare(currentUser, false, false, false, null);
-    channel.basicConsume(currentUser, true,
-        new DefaultConsumer(channel) {
-          public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties,
-              byte[] body) {
-            try {
-              var message = Message.fromBytes(body);
-              reader.printAbove(message.toString());
-            } catch (final Exception e) {
-              e.printStackTrace();
-            }
+    channel.basicConsume(
+      currentUser,
+      true,
+      new DefaultConsumer(channel) {
+        public void handleDelivery(
+          String consumerTag,
+          Envelope envelope,
+          AMQP.BasicProperties properties,
+          byte[] body
+        ) {
+          try {
+            recieveMessage(reader, Message.parseFrom(body));
+          } catch (final Exception e) {
+            e.printStackTrace();
           }
-        });
+        }
+      }
+    );
 
     String prompt;
     while (true) {
       try {
-        prompt = reader.readLine((currentDestinatary.isBlank() ? "" : ("@" + currentDestinatary)) + "<< ");
+        prompt = reader.readLine(
+          (currentDestinatary.isBlank() ? "" : ("@" + currentDestinatary)) +
+            "<< "
+        );
       } catch (final Exception e) {
         System.out.println("Logged out");
         break;
       }
 
-      if (prompt.isBlank())
-        continue;
+      if (prompt.isBlank()) continue;
 
       if (prompt.charAt(0) == '!') {
         var command = prompt.substring(1).trim();
@@ -70,7 +84,12 @@ public class Chat {
           System.out.println("Logged out");
           break;
         } else {
-          System.out.println(String.format("\"%s\" is not in list of available commands", command));
+          System.out.println(
+            String.format(
+              "\"%s\" is not in list of available commands",
+              command
+            )
+          );
         }
         continue;
       }
@@ -105,13 +124,40 @@ public class Chat {
     connection.close();
   }
 
-  public static void sendMessage(Channel channel, String destinatary, String sender, String content) {
+  public static void recieveMessage(LineReader reader, Message message) {
+    reader.printAbove(
+      String.format(
+        "(%s) @%s says: %s",
+        message.getDatetime(),
+        message.getSender(),
+        message.getBody().toStringUtf8()
+      )
+    );
+  }
+
+  public static void sendMessage(
+    Channel channel,
+    String destinatary,
+    String sender,
+    String text
+  ) {
     try {
-      var message = new Message(content, sender);
-      var messageBytes = Message.toBytes(message);
-      channel.basicPublish("", destinatary, null, messageBytes);
+      var payload = Message.newBuilder()
+        .setSender(sender)
+        .setBody(ByteString.copyFromUtf8(text))
+        .setDatetime(
+          LocalDateTime.now().format(
+            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
+          )
+        )
+        .build()
+        .toByteArray();
+
+      channel.basicPublish("", destinatary, null, payload);
     } catch (final IOException exception) {
-      System.err.println("An error occurred while sending the message: " + exception.getMessage());
+      System.err.println(
+        "An error occurred while sending the message: " + exception.getMessage()
+      );
     }
   }
 }
