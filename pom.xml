@@ -19,7 +19,7 @@
           <archive>
             <manifest>
               <mainClass>
-                br.ufs.dcomp.ChatRabbitMQ.Chat
+                br.ufs.dcomp.ChatRabbitMQ.Main
               </mainClass>
             </manifest>
           </archive>
@@ -86,6 +86,11 @@
       <groupId>com.google.protobuf</groupId>
       <artifactId>protobuf-java-util</artifactId>
       <version>4.33.1</version>
+    </dependency>
+    <dependency>
+      <groupId>io.github.cdimascio</groupId>
+      <artifactId>dotenv-java</artifactId>
+      <version>3.2.0</version>
     </dependency>
   </dependencies>
 </project>
