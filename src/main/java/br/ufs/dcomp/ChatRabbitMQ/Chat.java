@@ -1,12 +1,16 @@
 package br.ufs.dcomp.ChatRabbitMQ;
 
 import br.ufs.dcomp.Message;
+import br.ufs.dcomp.Message.Builder;
 import com.google.protobuf.ByteString;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.Consumer;
 import java.io.IOException;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.TimeoutException;
@@ -66,6 +70,27 @@ public class Chat implements AutoCloseable {
       return true;
     } catch (Exception e) {
       return false;
+    }
+  }
+
+  private Builder createDefaultMessageBuilder() {
+    return Message.newBuilder().setDatetime(
+      LocalDateTime.now().format(
+        DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
+      )
+    );
+  }
+
+  private void sendSystemMessage(String text) {
+    var payload = createDefaultMessageBuilder()
+      .setBody(ByteString.copyFromUtf8(text))
+      .build()
+      .toByteArray();
+
+    try {
+      this.channel.basicPublish("", currentUser, null, payload);
+    } catch (final Exception e) {
+      return;
     }
   }
 
@@ -202,5 +227,77 @@ public class Chat implements AutoCloseable {
     } catch (final Exception e) {
       throw new ChatException("Could not send message");
     }
+  }
+
+  public void sendFile(String filepath) throws ChatException {
+    Path path;
+    String type;
+    String filename;
+
+    filepath = filepath.replaceFirst("^~", System.getProperty("user.home"));
+
+    try {
+      path = FileSystems.getDefault()
+        .getPath(filepath)
+        .normalize()
+        .toAbsolutePath();
+    } catch (final Exception e) {
+      throw new ChatException("Could not find the file");
+    }
+
+    if (!Files.isRegularFile(path)) {
+      throw new ChatException("Path is not a regular file");
+    }
+
+    try {
+      type = Files.probeContentType(path);
+    } catch (final Exception e) {
+      throw new ChatException("Could not probe content type");
+    }
+
+    filename = path.getFileName().toString();
+
+    new Thread(() -> {
+      byte[] content;
+      try {
+        content = Files.readAllBytes(path);
+      } catch (final Exception e) {
+        sendSystemMessage("Could not read file " + filename);
+        return;
+      }
+
+      var builder = createDefaultMessageBuilder()
+        .setSender(currentUser)
+        .setBody(ByteString.copyFrom(content))
+        .setType(type)
+        .setFilename(filename);
+
+      if (!currentGroup.isEmpty()) {
+        builder = builder.setGroup(currentGroup);
+      }
+
+      var payload = builder.build().toByteArray();
+
+      String destination = String.format(
+        currentDestinatary.isBlank()
+          ? "group " + currentGroup
+          : "user " + currentDestinatary
+      );
+      try {
+        this.channel.basicPublish(
+          currentGroup,
+          currentDestinatary,
+          null,
+          payload
+        );
+        sendSystemMessage("File " + filename + " was sent to " + destination);
+      } catch (final Exception e) {
+        sendSystemMessage(
+          "Could not send file " + filename + " to " + destination
+        );
+        return;
+      }
+    })
+      .start();
   }
 }

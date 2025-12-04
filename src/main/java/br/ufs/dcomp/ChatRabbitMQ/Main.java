@@ -6,6 +6,9 @@ import com.rabbitmq.client.DefaultConsumer;
 import com.rabbitmq.client.Envelope;
 import io.github.cdimascio.dotenv.Dotenv;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import org.jline.reader.EndOfFileException;
@@ -18,6 +21,10 @@ public class Main {
   public static void main(String[] argv) throws IOException, TimeoutException {
     var env = Dotenv.configure().ignoreIfMissing().load();
     var host = env.get("HOST", "localhost");
+    var folder = env.get(
+      "DOWNLOAD_FOLDER",
+      Paths.get(System.getProperty("user.home"), "Downloads").toString()
+    );
 
     var reader = LineReaderBuilder.builder()
       .terminal(TerminalBuilder.terminal())
@@ -45,6 +52,38 @@ public class Main {
             var message = Message.parseFrom(body);
 
             if (message.getSender().equals(username.get())) return;
+
+            if (!message.hasSender()) {
+              reader.printAbove(
+                String.format(
+                  "(%s) System reports: %s",
+                  message.getDatetime(),
+                  message
+                    .getBody()
+                    .toStringUtf8()
+                    .replaceFirst("group ", "#")
+                    .replaceFirst("user ", "@")
+                )
+              );
+              return;
+            }
+
+            if (message.hasType() && message.hasFilename()) {
+              Files.write(
+                Path.of(folder, message.getFilename()),
+                message.getBody().toByteArray()
+              );
+              reader.printAbove(
+                String.format(
+                  "(%s) File %s received from %s%s",
+                  message.getDatetime(),
+                  message.getFilename(),
+                  "@" + message.getSender(),
+                  message.hasGroup() ? "#" + message.getGroup() : ""
+                )
+              );
+              return;
+            }
 
             reader.printAbove(
               String.format(
@@ -103,6 +142,10 @@ public class Main {
             case "leave-group":
               chat.leaveGroup(args[1]);
               break;
+            case "upload":
+              chat.sendFile(args[1]);
+              System.out.println("Sending file " + args[1]);
+              break;
             case "exit":
               chat.close();
               System.out.println("Logged out");
@@ -128,6 +171,9 @@ public class Main {
               );
               System.out.println(
                 "!leave-group <group-name>\tLeave an existing group"
+              );
+              System.out.println(
+                "!upload <file-path>\tUpload a file to current chat"
               );
               System.out.println("!help\tDisplay help");
               System.out.println("!exit\tEnd program");
