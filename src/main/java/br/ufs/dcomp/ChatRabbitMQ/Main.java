@@ -137,7 +137,7 @@ public class Main {
               chat.addUserToGroup(args[1], args[2]);
               break;
             case "remove-user":
-              chat.removeUserToGroup(args[1], args[2]);
+              chat.removeUserFromGroup(args[1], args[2]);
               break;
             case "leave-group":
               chat.leaveGroup(args[1]);
@@ -225,7 +225,7 @@ public class Main {
       }
 
       try {
-        chat.sendMessage(prompt);
+        chat.sendText(prompt);
       } catch (final ChatException e) {
         System.err.println(e.getMessage());
       }

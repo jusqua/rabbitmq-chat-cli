@@ -18,6 +18,9 @@ import java.util.function.Function;
 
 public class Chat implements AutoCloseable {
 
+  private static final String fileQueuePostfix = "-file";
+  private static final String textQueuePostfix = "-text";
+
   private boolean isActive;
   private Connection connection;
   private Channel channel;
@@ -28,7 +31,7 @@ public class Chat implements AutoCloseable {
 
   Chat(
     String host,
-    String username,
+    String userName,
     Function<Channel, Consumer> consumerFactory
   ) throws IOException, TimeoutException {
     var connectionFactory = new ConnectionFactory();
@@ -36,12 +39,44 @@ public class Chat implements AutoCloseable {
     this.connection = connectionFactory.newConnection();
     this.channel = connection.createChannel();
 
-    this.currentUser = username;
+    this.currentUser = userName;
     this.currentDestinatary = "";
     this.currentGroup = "";
-    this.channel.queueDeclare(username, false, false, false, null);
-    this.channel.basicConsume(username, true, consumerFactory.apply(channel));
+
+    this.channel.queueDeclare(
+      getFileQueue(userName),
+      false,
+      false,
+      false,
+      null
+    );
+    this.channel.queueDeclare(
+      getTextQueue(userName),
+      false,
+      false,
+      false,
+      null
+    );
+
+    this.channel.basicConsume(
+      getFileQueue(userName),
+      true,
+      consumerFactory.apply(channel)
+    );
+    this.channel.basicConsume(
+      getTextQueue(userName),
+      true,
+      consumerFactory.apply(channel)
+    );
     this.isActive = true;
+  }
+
+  private static String getFileQueue(final String userName) {
+    return userName + Chat.fileQueuePostfix;
+  }
+
+  private static String getTextQueue(final String userName) {
+    return userName + Chat.textQueuePostfix;
   }
 
   @Override
@@ -65,7 +100,7 @@ public class Chat implements AutoCloseable {
   private boolean isUserExists(String userName) {
     try {
       var tmp = this.connection.createChannel();
-      tmp.queueDeclarePassive(userName);
+      tmp.queueDeclarePassive(getTextQueue(userName));
       tmp.close();
       return true;
     } catch (Exception e) {
@@ -81,14 +116,19 @@ public class Chat implements AutoCloseable {
     );
   }
 
-  private void sendSystemMessage(String text) {
+  private void sendSystem(String text) {
     var payload = createDefaultMessageBuilder()
       .setBody(ByteString.copyFromUtf8(text))
       .build()
       .toByteArray();
 
     try {
-      this.channel.basicPublish("", currentUser, null, payload);
+      this.channel.basicPublish(
+        "",
+        getTextQueue(this.currentUser),
+        null,
+        payload
+      );
     } catch (final Exception e) {
       return;
     }
@@ -110,19 +150,6 @@ public class Chat implements AutoCloseable {
     return this.currentGroup;
   }
 
-  public void createGroup(String groupName) throws ChatException {
-    if (isGroupExists(groupName)) {
-      throw new ChatException("Given group already exist");
-    }
-
-    try {
-      this.channel.exchangeDeclare(groupName, "fanout");
-      this.channel.queueBind(this.currentUser, groupName, "");
-    } catch (final Exception e) {
-      throw new ChatException("Could not create group");
-    }
-  }
-
   public void deleteGroup(String groupName) throws ChatException {
     if (!isGroupExists(groupName)) {
       throw new ChatException("Given group does not exist");
@@ -135,18 +162,6 @@ public class Chat implements AutoCloseable {
     }
   }
 
-  public void leaveGroup(String groupName) throws ChatException {
-    if (!isGroupExists(groupName)) {
-      throw new ChatException("Given group does not exist");
-    }
-
-    try {
-      this.channel.queueUnbind(currentUser, groupName, "");
-    } catch (final Exception e) {
-      throw new ChatException("Could not leave group");
-    }
-  }
-
   public void addUserToGroup(String userName, String groupName)
     throws ChatException {
     if (!isUserExists(userName)) {
@@ -156,13 +171,35 @@ public class Chat implements AutoCloseable {
     }
 
     try {
-      this.channel.queueBind(userName, groupName, "");
+      this.channel.queueBind(
+        getFileQueue(userName),
+        groupName,
+        Chat.fileQueuePostfix
+      );
+      this.channel.queueBind(
+        getTextQueue(userName),
+        groupName,
+        Chat.textQueuePostfix
+      );
     } catch (final Exception e) {
       throw new ChatException("Could not add user to group");
     }
   }
 
-  public void removeUserToGroup(String userName, String groupName)
+  public void createGroup(String groupName) throws ChatException {
+    if (isGroupExists(groupName)) {
+      throw new ChatException("Given group already exist");
+    }
+
+    try {
+      this.channel.exchangeDeclare(groupName, "direct");
+      addUserToGroup(this.currentUser, groupName);
+    } catch (final Exception e) {
+      throw new ChatException("Could not create group");
+    }
+  }
+
+  public void removeUserFromGroup(String userName, String groupName)
     throws ChatException {
     if (!isUserExists(userName)) {
       throw new ChatException("Given user does not exist");
@@ -171,10 +208,27 @@ public class Chat implements AutoCloseable {
     }
 
     try {
-      this.channel.queueUnbind(userName, groupName, "");
+      this.channel.queueUnbind(
+        getFileQueue(userName),
+        groupName,
+        Chat.fileQueuePostfix
+      );
+      this.channel.queueUnbind(
+        getTextQueue(userName),
+        groupName,
+        Chat.textQueuePostfix
+      );
     } catch (final Exception e) {
-      throw new ChatException("Could not remove user from group");
+      if (userName.equals(this.currentUser)) {
+        throw new ChatException("Could not leave group");
+      } else {
+        throw new ChatException("Could not remove user from group");
+      }
     }
+  }
+
+  public void leaveGroup(String groupName) throws ChatException {
+    removeUserFromGroup(groupName, this.currentUser);
   }
 
   public void setDestinatary(String userName) throws ChatException {
@@ -201,7 +255,7 @@ public class Chat implements AutoCloseable {
     this.currentDestinatary = "";
   }
 
-  public void sendMessage(String text) throws ChatException {
+  public void sendText(String text) throws ChatException {
     var builder = Message.newBuilder()
       .setSender(currentUser)
       .setBody(ByteString.copyFromUtf8(text))
@@ -220,7 +274,7 @@ public class Chat implements AutoCloseable {
     try {
       this.channel.basicPublish(
         currentGroup,
-        currentDestinatary,
+        getTextQueue(currentDestinatary),
         null,
         payload
       );
@@ -262,7 +316,7 @@ public class Chat implements AutoCloseable {
       try {
         content = Files.readAllBytes(path);
       } catch (final Exception e) {
-        sendSystemMessage("Could not read file " + filename);
+        sendSystem("Could not read file " + filename);
         return;
       }
 
@@ -286,15 +340,13 @@ public class Chat implements AutoCloseable {
       try {
         this.channel.basicPublish(
           currentGroup,
-          currentDestinatary,
+          getFileQueue(currentDestinatary),
           null,
           payload
         );
-        sendSystemMessage("File " + filename + " was sent to " + destination);
+        sendSystem("File " + filename + " was sent to " + destination);
       } catch (final Exception e) {
-        sendSystemMessage(
-          "Could not send file " + filename + " to " + destination
-        );
+        sendSystem("Could not send file " + filename + " to " + destination);
         return;
       }
     })
