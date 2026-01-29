@@ -26,8 +26,8 @@ public class Main {
     final var HOST = env.get("HOST", "localhost");
     final var VHOST = env.get("VHOST", "/");
     final var PORT = env.get("PORT", "15672");
-    final var USER = env.get("USER", "guest");
-    final var PASSWORD = env.get("PASSWORD", "guest");
+    final var USER = env.get("RABBIT_USER", "guest");
+    final var PASSWORD = env.get("RABBIT_PASSWORD", "guest");
     final var FOLDER = env.get(
       "FOLDER",
       Paths.get(System.getProperty("user.home"), "Downloads").toString()
