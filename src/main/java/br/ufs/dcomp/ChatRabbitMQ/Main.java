@@ -29,7 +29,6 @@ public class Main {
       "DOWNLOAD_FOLDER",
       Paths.get(System.getProperty("user.home"), "Downloads").toString()
     );
-    System.out.println(host + " " + user + " " + password + " " + folder);
 
     var reader = LineReaderBuilder.builder()
       .terminal(TerminalBuilder.terminal())
@@ -107,19 +106,7 @@ public class Main {
       }
     }
 
-    try {
-      chat.logIn(username);
-    } catch (final IOException e) {
-      chat.close();
-      System.out.println("Could not log into the chat");
-      return;
-    } catch (final Exception e) {
-      chat.close();
-      System.out.println("Exited");
-      return;
-    }
-
-    while (chat.getIsActive()) {
+    while (chat.isOpen()) {
       String prompt;
       try {
         prompt = reader.readLine(

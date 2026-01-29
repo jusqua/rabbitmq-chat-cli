@@ -22,11 +22,10 @@ public class Chat implements AutoCloseable {
   private static final String fileNamespace = "chat.file";
   private static final String textNamespace = "chat.text";
 
-  private boolean isActive;
   private final Connection connection;
-  private final Channel channel;
   private final BiFunction<Channel, String, Consumer> factory;
 
+  private Channel channel;
   private String currentUser;
   private String currentDestinatary;
   private String currentGroup;
@@ -45,14 +44,13 @@ public class Chat implements AutoCloseable {
     connectionFactory.setVirtualHost(vhost);
 
     this.connection = connectionFactory.newConnection();
-    this.channel = connection.createChannel();
+    this.channel = this.connection.createChannel();
 
     this.currentUser = "";
     this.currentDestinatary = "";
     this.currentGroup = "";
 
     this.factory = factory;
-    this.isActive = true;
   }
 
   private static String getFileQueue(final String userName) {
@@ -67,7 +65,6 @@ public class Chat implements AutoCloseable {
   public void close() throws IOException, TimeoutException {
     this.channel.close();
     this.connection.close();
-    this.isActive = false;
   }
 
   private boolean isGroupExists(String groupName) {
@@ -118,8 +115,8 @@ public class Chat implements AutoCloseable {
     }
   }
 
-  public boolean getIsActive() {
-    return this.isActive;
+  public boolean isOpen() {
+    return this.connection.isOpen();
   }
 
   public String getCurrentUser() {
@@ -134,32 +131,60 @@ public class Chat implements AutoCloseable {
     return this.currentGroup;
   }
 
-  public void logIn(String userName) throws IOException {
-    this.channel.queueDeclare(
-      getFileQueue(userName),
-      false,
-      false,
-      false,
-      null
-    );
-    this.channel.queueDeclare(
-      getTextQueue(userName),
-      false,
-      false,
-      false,
-      null
-    );
+  public void logIn(String userName) throws ChatException {
+    if (!this.currentUser.isEmpty()) {
+      throw new ChatException("Already logged in");
+    }
 
-    this.channel.basicConsume(
-      getFileQueue(userName),
-      true,
-      this.factory.apply(channel, userName)
-    );
-    this.channel.basicConsume(
-      getTextQueue(userName),
-      true,
-      this.factory.apply(channel, userName)
-    );
+    try {
+      this.channel.queueDeclare(
+        getFileQueue(userName),
+        false,
+        false,
+        false,
+        null
+      );
+      this.channel.queueDeclare(
+        getTextQueue(userName),
+        false,
+        false,
+        false,
+        null
+      );
+
+      this.channel.basicConsume(
+        getFileQueue(userName),
+        true,
+        this.factory.apply(channel, userName)
+      );
+      this.channel.basicConsume(
+        getTextQueue(userName),
+        true,
+        this.factory.apply(channel, userName)
+      );
+
+      this.currentUser = userName;
+      this.currentDestinatary = "";
+      this.currentGroup = "";
+    } catch (final Exception e) {
+      throw new ChatException("Could not log in");
+    }
+  }
+
+  public void logOut() throws ChatException {
+    if (this.currentUser.isEmpty()) {
+      throw new ChatException("Not logged in");
+    }
+
+    try {
+      this.currentUser = "";
+      this.currentDestinatary = "";
+      this.currentGroup = "";
+      this.channel.close();
+      this.channel = this.connection.createChannel();
+    } catch (final Exception e) {
+      throw new ChatException("Could not log out");
+    }
   }
 
   public void deleteGroup(String groupName) throws ChatException {
