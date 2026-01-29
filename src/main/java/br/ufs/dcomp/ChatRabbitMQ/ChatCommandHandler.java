@@ -123,7 +123,19 @@ public class ChatCommandHandler {
         new String[] { "list-users", "group-name" },
         "List the users who are participating in the current group",
         args -> {
-          chat.listUsers(args[1]);
+          var list = chat.listUsers(args[1]);
+          System.out.printf(
+            "%c%s user count: %d\n",
+            ChatSymbol.GROUP_SYMBOL,
+            args[1],
+            list.size()
+          );
+          for (var u : list) {
+            System.out.print(ChatSymbol.USER_SYMBOL + u + " ");
+          }
+          if (list.size() > 0) {
+            System.out.println();
+          }
         }
       )
     );
@@ -133,7 +145,19 @@ public class ChatCommandHandler {
         new String[] { "list-groups" },
         "List the groups you are participating",
         args -> {
-          chat.listGroups();
+          var list = chat.listGroups();
+          System.out.printf(
+            "%c%s group count: %d\n",
+            ChatSymbol.USER_SYMBOL,
+            chat.getUserName(),
+            list.size()
+          );
+          for (var g : list) {
+            System.out.print(ChatSymbol.GROUP_SYMBOL + g + " ");
+          }
+          if (list.size() > 0) {
+            System.out.println();
+          }
         }
       )
     );

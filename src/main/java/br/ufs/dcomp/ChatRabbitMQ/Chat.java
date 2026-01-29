@@ -2,6 +2,7 @@ package br.ufs.dcomp.ChatRabbitMQ;
 
 import br.ufs.dcomp.Message;
 import br.ufs.dcomp.Message.Builder;
+import com.google.gson.JsonParser;
 import com.google.protobuf.ByteString;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
@@ -21,12 +22,14 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 
 public class Chat implements AutoCloseable {
 
+  private static final String groupNamespace = "chat.group";
   private static final String fileNamespace = "chat.file";
   private static final String textNamespace = "chat.text";
 
@@ -76,6 +79,11 @@ public class Chat implements AutoCloseable {
     this.factory = factory;
   }
 
+  private static String getGroupExchange(final String groupName) {
+    if (groupName.isEmpty()) return "";
+    return Chat.groupNamespace + "." + groupName;
+  }
+
   private static String getFileQueue(final String userName) {
     if (userName.isEmpty()) return Chat.fileNamespace;
     return Chat.fileNamespace + "." + userName;
@@ -95,7 +103,7 @@ public class Chat implements AutoCloseable {
   private boolean isGroupExists(String groupName) {
     try {
       var tmp = this.connection.createChannel();
-      tmp.exchangeDeclarePassive(groupName);
+      tmp.exchangeDeclarePassive(getGroupExchange(groupName));
       tmp.close();
       return true;
     } catch (Exception e) {
@@ -213,7 +221,7 @@ public class Chat implements AutoCloseable {
     }
 
     try {
-      this.channel.exchangeDelete(groupName);
+      this.channel.exchangeDelete(getGroupExchange(groupName));
     } catch (final Exception e) {
       throw new ChatException("Could not delete group");
     }
@@ -230,12 +238,12 @@ public class Chat implements AutoCloseable {
     try {
       this.channel.queueBind(
         getFileQueue(userName),
-        groupName,
+        getGroupExchange(groupName),
         Chat.fileNamespace
       );
       this.channel.queueBind(
         getTextQueue(userName),
-        groupName,
+        getGroupExchange(groupName),
         Chat.textNamespace
       );
     } catch (final Exception e) {
@@ -249,8 +257,9 @@ public class Chat implements AutoCloseable {
     }
 
     try {
-      this.channel.exchangeDeclare(groupName, "direct");
+      this.channel.exchangeDeclare(getGroupExchange(groupName), "direct");
       addUserToGroup(this.userName, groupName);
+      setDestinatary(groupName, true);
     } catch (final IOException e) {
       throw new ChatException("Could not create group");
     }
@@ -267,12 +276,12 @@ public class Chat implements AutoCloseable {
     try {
       this.channel.queueUnbind(
         getFileQueue(userName),
-        groupName,
+        getGroupExchange(groupName),
         Chat.fileNamespace
       );
       this.channel.queueUnbind(
         getTextQueue(userName),
-        groupName,
+        getGroupExchange(groupName),
         Chat.textNamespace
       );
     } catch (final Exception e) {
@@ -288,12 +297,16 @@ public class Chat implements AutoCloseable {
     removeUserFromGroup(groupName, this.userName);
   }
 
-  public void listUsers(String groupName) throws ChatException {
+  public ArrayList<String> listUsers(String groupName) throws ChatException {
     if (!isGroupExists(groupName)) {
       throw new ChatException("Given group does not exist");
     }
+    var list = new ArrayList<String>();
 
-    groupName = URLEncoder.encode(groupName, StandardCharsets.UTF_8);
+    groupName = URLEncoder.encode(
+      getGroupExchange(groupName),
+      StandardCharsets.UTF_8
+    );
     var uri = this.host.resolve(
       "/api/exchanges/" + this.vhost + "/" + groupName + "/bindings/source"
     );
@@ -307,14 +320,25 @@ public class Chat implements AutoCloseable {
       if (response.statusCode() != 200) {
         throw new ChatException("Fail to retrieve data from server");
       }
+      for (var e : JsonParser.parseString(response.body()).getAsJsonArray()) {
+        String destination = e
+          .getAsJsonObject()
+          .get("destination")
+          .getAsString();
+        if (destination.startsWith(Chat.fileNamespace)) {
+          list.add(destination.substring(Chat.fileNamespace.length() + 1));
+        }
+      }
     } catch (final IOException e) {
       throw new ChatException("Could not retrieve data");
     } catch (final InterruptedException e) {
       throw new ChatException("Time limit to retrieve data exceeded");
     }
+    return list;
   }
 
-  public void listGroups() throws ChatException {
+  public ArrayList<String> listGroups() throws ChatException {
+    var list = new ArrayList<String>();
     var uri = this.host.resolve("/api/exchanges/" + this.vhost);
     var request = HttpRequest.newBuilder()
       .uri(uri)
@@ -326,11 +350,22 @@ public class Chat implements AutoCloseable {
       if (response.statusCode() != 200) {
         throw new ChatException("Fail to retrieve data from server");
       }
+      for (var e : JsonParser.parseString(response.body()).getAsJsonArray()) {
+        String name = e.getAsJsonObject().get("name").getAsString();
+        if (name.startsWith(Chat.groupNamespace)) {
+          var groupName = name.substring(Chat.groupNamespace.length() + 1);
+          var userList = listUsers(groupName);
+          if (userList.contains(this.userName)) {
+            list.add(groupName);
+          }
+        }
+      }
     } catch (final IOException e) {
       throw new ChatException("Could not retrieve data");
     } catch (final InterruptedException e) {
       throw new ChatException("Time limit to retrieve data exceeded");
     }
+    return list;
   }
 
   public String getDestinatary() {
@@ -385,7 +420,7 @@ public class Chat implements AutoCloseable {
 
     try {
       this.channel.basicPublish(
-        this.exchange,
+        getGroupExchange(this.exchange),
         getTextQueue(this.routingKey),
         null,
         payload
@@ -451,7 +486,7 @@ public class Chat implements AutoCloseable {
       );
       try {
         this.channel.basicPublish(
-          this.exchange,
+          getGroupExchange(this.exchange),
           getFileQueue(this.routingKey),
           null,
           payload
