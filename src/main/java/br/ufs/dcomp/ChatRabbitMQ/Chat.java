@@ -8,12 +8,20 @@ import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.Consumer;
 import java.io.IOException;
+import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Base64;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 
@@ -22,42 +30,59 @@ public class Chat implements AutoCloseable {
   private static final String fileNamespace = "chat.file";
   private static final String textNamespace = "chat.text";
 
+  private final HttpClient client;
   private final Connection connection;
   private final BiFunction<Channel, String, Consumer> factory;
 
+  private final String auth;
+  private final URI host;
+  private final String vhost;
+
   private Channel channel;
-  private String currentUser;
-  private String currentDestinatary;
-  private String currentGroup;
+  private String userName;
+  private String routingKey;
+  private String exchange;
 
   Chat(
     String host,
     String vhost,
+    String port,
     String user,
     String password,
     BiFunction<Channel, String, Consumer> factory
   ) throws IOException, TimeoutException, URISyntaxException {
+    var credentials = user + ":" + password;
+    this.auth = Base64.getEncoder().encodeToString(credentials.getBytes());
+    this.host = new URI("http://" + host + ":" + port);
+    this.vhost = URLEncoder.encode(vhost, StandardCharsets.UTF_8);
+
     var connectionFactory = new ConnectionFactory();
     connectionFactory.setHost(host);
     connectionFactory.setUsername(user);
     connectionFactory.setPassword(password);
     connectionFactory.setVirtualHost(vhost);
 
+    this.client = HttpClient.newBuilder()
+      .connectTimeout(Duration.ofSeconds(5))
+      .build();
+
     this.connection = connectionFactory.newConnection();
     this.channel = this.connection.createChannel();
 
-    this.currentUser = "";
-    this.currentDestinatary = "";
-    this.currentGroup = "";
+    this.userName = "";
+    this.routingKey = "";
+    this.exchange = "";
 
     this.factory = factory;
   }
 
   private static String getFileQueue(final String userName) {
+    if (userName.isEmpty()) return Chat.fileNamespace;
     return Chat.fileNamespace + "." + userName;
   }
 
   private static String getTextQueue(final String userName) {
+    if (userName.isEmpty()) return Chat.textNamespace;
     return Chat.textNamespace + "." + userName;
   }
 
@@ -104,12 +129,7 @@ public class Chat implements AutoCloseable {
       .toByteArray();
 
     try {
-      this.channel.basicPublish(
-        "",
-        getTextQueue(this.currentUser),
-        null,
-        payload
-      );
+      this.channel.basicPublish("", getTextQueue(this.userName), null, payload);
     } catch (final Exception e) {
       return;
     }
@@ -119,20 +139,20 @@ public class Chat implements AutoCloseable {
     return this.connection.isOpen();
   }
 
-  public String getCurrentUser() {
-    return this.currentUser;
+  public String getUserName() {
+    return this.userName;
   }
 
-  public String getCurrentDestinatary() {
-    return this.currentDestinatary;
+  public String getRoutingKey() {
+    return this.routingKey;
   }
 
-  public String getCurrentGroup() {
-    return this.currentGroup;
+  public String getExchange() {
+    return this.exchange;
   }
 
   public void logIn(String userName) throws ChatException {
-    if (!this.currentUser.isEmpty()) {
+    if (!this.userName.isEmpty()) {
       throw new ChatException("Already logged in");
     }
 
@@ -163,23 +183,23 @@ public class Chat implements AutoCloseable {
         this.factory.apply(channel, userName)
       );
 
-      this.currentUser = userName;
-      this.currentDestinatary = "";
-      this.currentGroup = "";
+      this.userName = userName;
+      this.routingKey = "";
+      this.exchange = "";
     } catch (final Exception e) {
       throw new ChatException("Could not log in");
     }
   }
 
   public void logOut() throws ChatException {
-    if (this.currentUser.isEmpty()) {
+    if (this.userName.isEmpty()) {
       throw new ChatException("Not logged in");
     }
 
     try {
-      this.currentUser = "";
-      this.currentDestinatary = "";
-      this.currentGroup = "";
+      this.userName = "";
+      this.routingKey = "";
+      this.exchange = "";
       this.channel.close();
       this.channel = this.connection.createChannel();
     } catch (final Exception e) {
@@ -230,8 +250,8 @@ public class Chat implements AutoCloseable {
 
     try {
       this.channel.exchangeDeclare(groupName, "direct");
-      addUserToGroup(this.currentUser, groupName);
-    } catch (final Exception e) {
+      addUserToGroup(this.userName, groupName);
+    } catch (final IOException e) {
       throw new ChatException("Could not create group");
     }
   }
@@ -256,7 +276,7 @@ public class Chat implements AutoCloseable {
         Chat.textNamespace
       );
     } catch (final Exception e) {
-      if (userName.equals(this.currentUser)) {
+      if (userName.equals(this.userName)) {
         throw new ChatException("Could not leave group");
       } else {
         throw new ChatException("Could not remove user from group");
@@ -265,36 +285,91 @@ public class Chat implements AutoCloseable {
   }
 
   public void leaveGroup(String groupName) throws ChatException {
-    removeUserFromGroup(groupName, this.currentUser);
+    removeUserFromGroup(groupName, this.userName);
   }
 
-  public void setDestinatary(String userName) throws ChatException {
-    if (userName.isBlank()) {
-      throw new ChatException("No valid destinatary given");
-    } else if (userName.equals(this.currentUser)) {
-      throw new ChatException("Given destinatary cannot be yourself");
-    } else if (!isUserExists(userName)) {
-      throw new ChatException("Given destinatary does not exist");
-    }
-
-    this.currentDestinatary = userName;
-    this.currentGroup = "";
-  }
-
-  public void setGroup(String groupName) throws ChatException {
-    if (groupName.isBlank()) {
-      throw new ChatException("No valid group given");
-    } else if (!isGroupExists(groupName)) {
+  public void listUsers(String groupName) throws ChatException {
+    if (!isGroupExists(groupName)) {
       throw new ChatException("Given group does not exist");
     }
 
-    this.currentGroup = groupName;
-    this.currentDestinatary = "";
+    groupName = URLEncoder.encode(groupName, StandardCharsets.UTF_8);
+    var uri = this.host.resolve(
+      "/api/exchanges/" + this.vhost + "/" + groupName + "/bindings/source"
+    );
+    var request = HttpRequest.newBuilder()
+      .uri(uri)
+      .header("Authorization", "Basic " + auth)
+      .GET()
+      .build();
+    try {
+      var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() != 200) {
+        throw new ChatException("Fail to retrieve data from server");
+      }
+    } catch (final IOException e) {
+      throw new ChatException("Could not retrieve data");
+    } catch (final InterruptedException e) {
+      throw new ChatException("Time limit to retrieve data exceeded");
+    }
+  }
+
+  public void listGroups() throws ChatException {
+    var uri = this.host.resolve("/api/exchanges/" + this.vhost);
+    var request = HttpRequest.newBuilder()
+      .uri(uri)
+      .header("Authorization", "Basic " + auth)
+      .GET()
+      .build();
+    try {
+      var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() != 200) {
+        throw new ChatException("Fail to retrieve data from server");
+      }
+    } catch (final IOException e) {
+      throw new ChatException("Could not retrieve data");
+    } catch (final InterruptedException e) {
+      throw new ChatException("Time limit to retrieve data exceeded");
+    }
+  }
+
+  public String getDestinatary() {
+    if (!this.routingKey.isEmpty()) {
+      return "user=" + this.routingKey;
+    } else if (!this.exchange.isEmpty()) {
+      return "group=" + this.exchange;
+    }
+    return "";
+  }
+
+  public void setDestinatary(String target, boolean isGroup)
+    throws ChatException {
+    if (target.isBlank()) {
+      throw new ChatException("No blank destinatary given");
+    } else if (!isGroup && target.equals(this.userName)) {
+      throw new ChatException("Given destinatary cannot be yourself");
+    } else if (!isGroup && !isUserExists(target)) {
+      throw new ChatException("Given user does not exist");
+    } else if (isGroup && !isGroupExists(target)) {
+      throw new ChatException("Given group does not exist");
+    }
+
+    if (isGroup) {
+      this.routingKey = "";
+      this.exchange = target;
+    } else {
+      this.routingKey = target;
+      this.exchange = "";
+    }
+  }
+
+  public boolean hasDestinatary() {
+    return !this.exchange.isBlank() || !this.routingKey.isBlank();
   }
 
   public void sendText(String text) throws ChatException {
     var builder = Message.newBuilder()
-      .setSender(this.currentUser)
+      .setSender(this.userName)
       .setBody(ByteString.copyFromUtf8(text))
       .setDatetime(
         LocalDateTime.now().format(
@@ -302,16 +377,16 @@ public class Chat implements AutoCloseable {
         )
       );
 
-    if (!this.currentGroup.isBlank()) {
-      builder = builder.setGroup(this.currentGroup);
+    if (!this.exchange.isBlank()) {
+      builder = builder.setGroup(this.exchange);
     }
 
     var payload = builder.build().toByteArray();
 
     try {
       this.channel.basicPublish(
-        this.currentGroup,
-        getTextQueue(this.currentDestinatary),
+        this.exchange,
+        getTextQueue(this.routingKey),
         null,
         payload
       );
@@ -358,26 +433,26 @@ public class Chat implements AutoCloseable {
       }
 
       var builder = createDefaultMessageBuilder()
-        .setSender(this.currentUser)
+        .setSender(this.userName)
         .setBody(ByteString.copyFrom(content))
         .setType(type)
         .setFilename(filename);
 
-      if (!this.currentGroup.isEmpty()) {
-        builder = builder.setGroup(this.currentGroup);
+      if (!this.exchange.isEmpty()) {
+        builder = builder.setGroup(this.exchange);
       }
 
       var payload = builder.build().toByteArray();
 
       String destination = String.format(
-        this.currentDestinatary.isBlank()
-          ? "group " + this.currentGroup
-          : "user " + this.currentDestinatary
+        this.routingKey.isBlank()
+          ? "group=" + this.exchange
+          : "user=" + this.routingKey
       );
       try {
         this.channel.basicPublish(
-          this.currentGroup,
-          getFileQueue(this.currentDestinatary),
+          this.exchange,
+          getFileQueue(this.routingKey),
           null,
           payload
         );

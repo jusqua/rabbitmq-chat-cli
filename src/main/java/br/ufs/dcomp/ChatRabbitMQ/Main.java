@@ -10,6 +10,7 @@ import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.concurrent.TimeoutException;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReaderBuilder;
@@ -21,219 +22,142 @@ public class Main {
   public static void main(String[] argv)
     throws IOException, TimeoutException, URISyntaxException {
     var env = Dotenv.configure().ignoreIfMissing().load();
-    final var host = env.get("HOST", "localhost");
-    final var vhost = env.get("VIRTUAL_HOST", "/");
-    final var user = env.get("USER", "guest");
-    final var password = env.get("PASSWORD", "guest");
-    final var folder = env.get(
-      "DOWNLOAD_FOLDER",
+
+    final var HOST = env.get("HOST", "localhost");
+    final var VHOST = env.get("VHOST", "/");
+    final var PORT = env.get("PORT", "15672");
+    final var USER = env.get("USER", "guest");
+    final var PASSWORD = env.get("PASSWORD", "guest");
+    final var FOLDER = env.get(
+      "FOLDER",
       Paths.get(System.getProperty("user.home"), "Downloads").toString()
     );
 
-    var reader = LineReaderBuilder.builder()
+    final var READER = LineReaderBuilder.builder()
       .terminal(TerminalBuilder.terminal())
       .build();
 
-    var chat = new Chat(host, vhost, user, password, (channel, username) ->
-      new DefaultConsumer(channel) {
-        public void handleDelivery(
-          String consumerTag,
-          Envelope envelope,
-          AMQP.BasicProperties properties,
-          byte[] body
-        ) {
-          try {
-            var message = Message.parseFrom(body);
+    final var chat = new Chat(
+      HOST,
+      VHOST,
+      PORT,
+      USER,
+      PASSWORD,
+      (channel, username) ->
+        new DefaultConsumer(channel) {
+          public void handleDelivery(
+            String consumerTag,
+            Envelope envelope,
+            AMQP.BasicProperties properties,
+            byte[] body
+          ) {
+            try {
+              var message = Message.parseFrom(body);
 
-            if (message.getSender().equals(username)) return;
+              if (message.getSender().equals(username)) return;
 
-            if (!message.hasSender()) {
-              reader.printAbove(
+              if (!message.hasSender()) {
+                READER.printAbove(
+                  String.format(
+                    "(%s) System reports: %s",
+                    message.getDatetime(),
+                    message
+                      .getBody()
+                      .toStringUtf8()
+                      .replaceFirst("user=", ChatSymbol.USER_SYMBOL.toString())
+                      .replaceFirst(
+                        "group=",
+                        ChatSymbol.GROUP_SYMBOL.toString()
+                      )
+                  )
+                );
+                return;
+              }
+
+              if (message.hasType() && message.hasFilename()) {
+                Files.write(
+                  Path.of(FOLDER, message.getFilename()),
+                  message.getBody().toByteArray()
+                );
+                READER.printAbove(
+                  String.format(
+                    "(%s) File %s received from %s%s",
+                    message.getDatetime(),
+                    message.getFilename(),
+                    ChatSymbol.USER_SYMBOL + message.getSender(),
+                    message.hasGroup()
+                      ? ChatSymbol.GROUP_SYMBOL + message.getGroup()
+                      : ""
+                  )
+                );
+                return;
+              }
+
+              READER.printAbove(
                 String.format(
-                  "(%s) System reports: %s",
+                  "(%s) %s%s says: %s",
                   message.getDatetime(),
-                  message
-                    .getBody()
-                    .toStringUtf8()
-                    .replaceFirst("group ", "#")
-                    .replaceFirst("user ", "@")
+                  ChatSymbol.USER_SYMBOL + message.getSender(),
+                  message.hasGroup()
+                    ? ChatSymbol.GROUP_SYMBOL + message.getGroup()
+                    : "",
+                  message.getBody().toStringUtf8()
                 )
               );
-              return;
+            } catch (final Exception e) {
+              e.printStackTrace();
             }
-
-            if (message.hasType() && message.hasFilename()) {
-              Files.write(
-                Path.of(folder, message.getFilename()),
-                message.getBody().toByteArray()
-              );
-              reader.printAbove(
-                String.format(
-                  "(%s) File %s received from %s%s",
-                  message.getDatetime(),
-                  message.getFilename(),
-                  "@" + message.getSender(),
-                  message.hasGroup() ? "#" + message.getGroup() : ""
-                )
-              );
-              return;
-            }
-
-            reader.printAbove(
-              String.format(
-                "(%s) %s%s says: %s",
-                message.getDatetime(),
-                "@" + message.getSender(),
-                message.hasGroup() ? "#" + message.getGroup() : "",
-                message.getBody().toStringUtf8()
-              )
-            );
-          } catch (final Exception e) {
-            e.printStackTrace();
           }
         }
-      }
     );
 
-    var username = "";
-    while (username.isBlank()) {
-      try {
-        username = reader.readLine("User: ");
-      } catch (final Exception e) {
-        chat.close();
-        System.out.println("Exited");
-        return;
-      }
-    }
+    var commandHandler = new ChatCommandHandler(chat);
 
     while (chat.isOpen()) {
-      String prompt;
+      String response;
+
       try {
-        prompt = reader.readLine(
-          String.format(
-            "%s%s<< ",
-            chat.getCurrentDestinatary().isBlank()
-              ? ""
-              : "@" + chat.getCurrentDestinatary(),
-            chat.getCurrentGroup().isBlank() ? "" : "#" + chat.getCurrentGroup()
-          )
-        );
+        String prompt = "";
+        if (chat.getUserName().isBlank()) {
+          prompt = ChatSymbol.LOGIN_TEXT;
+        } else {
+          prompt = chat.getUserName();
+          prompt += chat
+            .getDestinatary()
+            .replaceFirst("user=", ChatSymbol.USER_SYMBOL.toString())
+            .replaceFirst("group=", ChatSymbol.GROUP_SYMBOL.toString());
+          prompt += ChatSymbol.PROMPT_TEXT;
+        }
+
+        response = READER.readLine(prompt);
       } catch (final EndOfFileException | UserInterruptException e) {
         chat.close();
-        System.out.println("Logged out");
         break;
       }
 
-      if (prompt.isBlank()) continue;
+      if (response.isBlank()) continue;
 
-      if (prompt.charAt(0) == '!') {
-        var args = prompt.substring(1).trim().split(" ");
-        if (args.length == 0) System.err.println("Invalid command");
-
+      if (chat.getUserName().isEmpty()) {
         try {
-          switch (args[0]) {
-            case "create-group":
-              chat.createGroup(args[1]);
-              break;
-            case "delete-group":
-              chat.deleteGroup(args[1]);
-              break;
-            case "add-user":
-              chat.addUserToGroup(args[1], args[2]);
-              break;
-            case "remove-user":
-              chat.removeUserFromGroup(args[1], args[2]);
-              break;
-            case "leave-group":
-              chat.leaveGroup(args[1]);
-              break;
-            case "upload":
-              chat.sendFile(args[1]);
-              System.out.println("Sending file " + args[1]);
-              break;
-            case "exit":
-              chat.close();
-              System.out.println("Logged out");
-              break;
-            case "help":
-              System.out.println("--- Select a destinatary ---");
-              System.out.println("@<destinatary-user-name>");
-              System.out.println("--- Select a group ---");
-              System.out.println("#<group-name>");
-              System.out.println();
-              System.out.println("--- Commands ---");
-              System.out.println(
-                "!create-group <group-name>\tCreate a chat group"
-              );
-              System.out.println(
-                "!delete-group <group-name>\tDelete an existing chat group"
-              );
-              System.out.println(
-                "!add-user <user-name> <group-name>\tAdd user to existing group"
-              );
-              System.out.println(
-                "!remove-user <user-name> <group-name>\tRemove user from existing group"
-              );
-              System.out.println(
-                "!leave-group <group-name>\tLeave an existing group"
-              );
-              System.out.println(
-                "!upload <file-path>\tUpload a file to current chat"
-              );
-              System.out.println("!help\tDisplay help");
-              System.out.println("!exit\tEnd program");
-              break;
-            default:
-              System.out.println(
-                String.format(
-                  "\"%s\" is not in list of available commands",
-                  prompt
-                )
-              );
-              break;
-          }
+          var username = response.trim();
+          chat.logIn(username);
+          System.out.println("Logged in as " + username);
+          continue;
         } catch (final ChatException e) {
           System.err.println(e.getMessage());
+          continue;
         }
-        continue;
       }
 
-      if (prompt.charAt(0) == '@') {
-        var args = prompt.substring(1).trim().split(" ");
-        if (args.length > 1) System.err.println("Invalid command");
-        try {
-          chat.setDestinatary(args[0]);
-        } catch (final ChatException e) {
-          System.err.println(e.getMessage());
-        }
-        continue;
+      var symbol = response.trim().charAt(0);
+      if (!Arrays.asList(ChatSymbol.COMMAND_SYMBOLS).contains(symbol)) {
+        symbol = ChatSymbol.TEXT_SYMBOL;
+        response = ChatSymbol.TEXT_SYMBOL + response;
       }
-
-      if (prompt.charAt(0) == '#') {
-        var args = prompt.substring(1).trim().split(" ");
-        if (args.length > 1) System.err.println("Invalid command");
-        try {
-          chat.setGroup(args[0]);
-        } catch (final ChatException e) {
-          System.err.println(e.getMessage());
-        }
-        continue;
-      }
-
-      if (
-        chat.getCurrentGroup().isBlank() &&
-        chat.getCurrentDestinatary().isBlank()
-      ) {
-        System.out.println("Use @<user-name> to set a destinatary");
-        System.out.println("Use #<group-name> to set a group");
-        continue;
-      }
-
-      try {
-        chat.sendText(prompt);
-      } catch (final ChatException e) {
-        System.err.println(e.getMessage());
-      }
+      var args = response.trim().substring(1).split(" ");
+      commandHandler.apply(symbol, args);
     }
+
+    System.out.println("Exited");
   }
 }
