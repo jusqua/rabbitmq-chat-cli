@@ -24,6 +24,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 
@@ -164,20 +165,23 @@ public class Chat implements AutoCloseable {
       throw new ChatException("Already logged in");
     }
 
+    var args = new HashMap<String, Object>();
+    args.put("x-queue-type", "quorum");
+
     try {
       this.channel.queueDeclare(
         getFileQueue(userName),
+        true,
         false,
         false,
-        false,
-        null
+        args
       );
       this.channel.queueDeclare(
         getTextQueue(userName),
+        true,
         false,
         false,
-        false,
-        null
+        args
       );
 
       this.channel.basicConsume(
@@ -195,6 +199,7 @@ public class Chat implements AutoCloseable {
       this.routingKey = "";
       this.exchange = "";
     } catch (final Exception e) {
+      e.printStackTrace();
       throw new ChatException("Could not log in");
     }
   }
