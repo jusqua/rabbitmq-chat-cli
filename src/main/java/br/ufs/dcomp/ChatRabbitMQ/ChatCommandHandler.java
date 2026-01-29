@@ -68,6 +68,7 @@ public class ChatCommandHandler {
         ChatSymbol.TEXT_SYMBOL
       )
     );
+
     appendToMap(
       new ChatCommand(
         new String[] { "create-group", "group-name" },
@@ -77,7 +78,6 @@ public class ChatCommandHandler {
         }
       )
     );
-
     appendToMap(
       new ChatCommand(
         new String[] { "delete-group", "group-name" },
@@ -87,7 +87,6 @@ public class ChatCommandHandler {
         }
       )
     );
-
     appendToMap(
       new ChatCommand(
         new String[] { "invite-user", "user-name", "group-name" },
@@ -97,7 +96,6 @@ public class ChatCommandHandler {
         }
       )
     );
-
     appendToMap(
       new ChatCommand(
         new String[] { "kick-user", "user-name", "group-name" },
@@ -107,7 +105,6 @@ public class ChatCommandHandler {
         }
       )
     );
-
     appendToMap(
       new ChatCommand(
         new String[] { "leave", "group-name" },
@@ -117,7 +114,6 @@ public class ChatCommandHandler {
         }
       )
     );
-
     appendToMap(
       new ChatCommand(
         new String[] { "list-users", "group-name" },
@@ -139,7 +135,6 @@ public class ChatCommandHandler {
         }
       )
     );
-
     appendToMap(
       new ChatCommand(
         new String[] { "list-groups" },
@@ -161,7 +156,6 @@ public class ChatCommandHandler {
         }
       )
     );
-
     appendToMap(
       new ChatCommand(
         new String[] { "help" },
@@ -176,7 +170,6 @@ public class ChatCommandHandler {
         }
       )
     );
-
     appendToMap(
       new ChatCommand(
         new String[] { "logout" },
@@ -186,7 +179,6 @@ public class ChatCommandHandler {
         }
       )
     );
-
     appendToMap(
       new ChatCommand(
         new String[] { "exit" },
