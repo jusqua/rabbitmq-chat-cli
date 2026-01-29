@@ -8,22 +8,24 @@ import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.Consumer;
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 
 public class Chat implements AutoCloseable {
 
-  private static final String fileQueuePostfix = "-file";
-  private static final String textQueuePostfix = "-text";
+  private static final String fileNamespace = "chat.file";
+  private static final String textNamespace = "chat.text";
 
   private boolean isActive;
-  private Connection connection;
-  private Channel channel;
+  private final Connection connection;
+  private final Channel channel;
+  private final BiFunction<Channel, String, Consumer> factory;
 
   private String currentUser;
   private String currentDestinatary;
@@ -31,52 +33,34 @@ public class Chat implements AutoCloseable {
 
   Chat(
     String host,
-    String userName,
-    Function<Channel, Consumer> consumerFactory
-  ) throws IOException, TimeoutException {
+    String vhost,
+    String user,
+    String password,
+    BiFunction<Channel, String, Consumer> factory
+  ) throws IOException, TimeoutException, URISyntaxException {
     var connectionFactory = new ConnectionFactory();
     connectionFactory.setHost(host);
+    connectionFactory.setUsername(user);
+    connectionFactory.setPassword(password);
+    connectionFactory.setVirtualHost(vhost);
+
     this.connection = connectionFactory.newConnection();
     this.channel = connection.createChannel();
 
-    this.currentUser = userName;
+    this.currentUser = "";
     this.currentDestinatary = "";
     this.currentGroup = "";
 
-    this.channel.queueDeclare(
-      getFileQueue(userName),
-      false,
-      false,
-      false,
-      null
-    );
-    this.channel.queueDeclare(
-      getTextQueue(userName),
-      false,
-      false,
-      false,
-      null
-    );
-
-    this.channel.basicConsume(
-      getFileQueue(userName),
-      true,
-      consumerFactory.apply(channel)
-    );
-    this.channel.basicConsume(
-      getTextQueue(userName),
-      true,
-      consumerFactory.apply(channel)
-    );
+    this.factory = factory;
     this.isActive = true;
   }
 
   private static String getFileQueue(final String userName) {
-    return userName + Chat.fileQueuePostfix;
+    return Chat.fileNamespace + "." + userName;
   }
 
   private static String getTextQueue(final String userName) {
-    return userName + Chat.textQueuePostfix;
+    return Chat.textNamespace + "." + userName;
   }
 
   @Override
@@ -150,6 +134,34 @@ public class Chat implements AutoCloseable {
     return this.currentGroup;
   }
 
+  public void logIn(String userName) throws IOException {
+    this.channel.queueDeclare(
+      getFileQueue(userName),
+      false,
+      false,
+      false,
+      null
+    );
+    this.channel.queueDeclare(
+      getTextQueue(userName),
+      false,
+      false,
+      false,
+      null
+    );
+
+    this.channel.basicConsume(
+      getFileQueue(userName),
+      true,
+      this.factory.apply(channel, userName)
+    );
+    this.channel.basicConsume(
+      getTextQueue(userName),
+      true,
+      this.factory.apply(channel, userName)
+    );
+  }
+
   public void deleteGroup(String groupName) throws ChatException {
     if (!isGroupExists(groupName)) {
       throw new ChatException("Given group does not exist");
@@ -174,12 +186,12 @@ public class Chat implements AutoCloseable {
       this.channel.queueBind(
         getFileQueue(userName),
         groupName,
-        Chat.fileQueuePostfix
+        Chat.fileNamespace
       );
       this.channel.queueBind(
         getTextQueue(userName),
         groupName,
-        Chat.textQueuePostfix
+        Chat.textNamespace
       );
     } catch (final Exception e) {
       throw new ChatException("Could not add user to group");
@@ -211,12 +223,12 @@ public class Chat implements AutoCloseable {
       this.channel.queueUnbind(
         getFileQueue(userName),
         groupName,
-        Chat.fileQueuePostfix
+        Chat.fileNamespace
       );
       this.channel.queueUnbind(
         getTextQueue(userName),
         groupName,
-        Chat.textQueuePostfix
+        Chat.textNamespace
       );
     } catch (final Exception e) {
       if (userName.equals(this.currentUser)) {
@@ -257,7 +269,7 @@ public class Chat implements AutoCloseable {
 
   public void sendText(String text) throws ChatException {
     var builder = Message.newBuilder()
-      .setSender(currentUser)
+      .setSender(this.currentUser)
       .setBody(ByteString.copyFromUtf8(text))
       .setDatetime(
         LocalDateTime.now().format(
@@ -265,16 +277,16 @@ public class Chat implements AutoCloseable {
         )
       );
 
-    if (!currentGroup.isEmpty()) {
-      builder = builder.setGroup(currentGroup);
+    if (!this.currentGroup.isBlank()) {
+      builder = builder.setGroup(this.currentGroup);
     }
 
     var payload = builder.build().toByteArray();
 
     try {
       this.channel.basicPublish(
-        currentGroup,
-        getTextQueue(currentDestinatary),
+        this.currentGroup,
+        getTextQueue(this.currentDestinatary),
         null,
         payload
       );
@@ -321,26 +333,26 @@ public class Chat implements AutoCloseable {
       }
 
       var builder = createDefaultMessageBuilder()
-        .setSender(currentUser)
+        .setSender(this.currentUser)
         .setBody(ByteString.copyFrom(content))
         .setType(type)
         .setFilename(filename);
 
-      if (!currentGroup.isEmpty()) {
-        builder = builder.setGroup(currentGroup);
+      if (!this.currentGroup.isEmpty()) {
+        builder = builder.setGroup(this.currentGroup);
       }
 
       var payload = builder.build().toByteArray();
 
       String destination = String.format(
-        currentDestinatary.isBlank()
-          ? "group " + currentGroup
-          : "user " + currentDestinatary
+        this.currentDestinatary.isBlank()
+          ? "group " + this.currentGroup
+          : "user " + this.currentDestinatary
       );
       try {
         this.channel.basicPublish(
-          currentGroup,
-          getFileQueue(currentDestinatary),
+          this.currentGroup,
+          getFileQueue(this.currentDestinatary),
           null,
           payload
         );

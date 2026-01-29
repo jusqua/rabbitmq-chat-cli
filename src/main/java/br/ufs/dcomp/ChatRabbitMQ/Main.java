@@ -6,11 +6,11 @@ import com.rabbitmq.client.DefaultConsumer;
 import com.rabbitmq.client.Envelope;
 import io.github.cdimascio.dotenv.Dotenv;
 import java.io.IOException;
+import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.UserInterruptException;
@@ -18,29 +18,24 @@ import org.jline.terminal.TerminalBuilder;
 
 public class Main {
 
-  public static void main(String[] argv) throws IOException, TimeoutException {
+  public static void main(String[] argv)
+    throws IOException, TimeoutException, URISyntaxException {
     var env = Dotenv.configure().ignoreIfMissing().load();
-    var host = env.get("HOST", "localhost");
-    var folder = env.get(
+    final var host = env.get("HOST", "localhost");
+    final var vhost = env.get("VIRTUAL_HOST", "/");
+    final var user = env.get("USER", "guest");
+    final var password = env.get("PASSWORD", "guest");
+    final var folder = env.get(
       "DOWNLOAD_FOLDER",
       Paths.get(System.getProperty("user.home"), "Downloads").toString()
     );
+    System.out.println(host + " " + user + " " + password + " " + folder);
 
     var reader = LineReaderBuilder.builder()
       .terminal(TerminalBuilder.terminal())
       .build();
 
-    var username = new AtomicReference<String>("");
-    while (username.get().isBlank()) {
-      try {
-        username.set(reader.readLine("User: "));
-      } catch (final Exception e) {
-        System.out.println("Exited");
-        return;
-      }
-    }
-
-    var chat = new Chat(host, username.get(), channel ->
+    var chat = new Chat(host, vhost, user, password, (channel, username) ->
       new DefaultConsumer(channel) {
         public void handleDelivery(
           String consumerTag,
@@ -51,7 +46,7 @@ public class Main {
           try {
             var message = Message.parseFrom(body);
 
-            if (message.getSender().equals(username.get())) return;
+            if (message.getSender().equals(username)) return;
 
             if (!message.hasSender()) {
               reader.printAbove(
@@ -100,6 +95,29 @@ public class Main {
         }
       }
     );
+
+    var username = "";
+    while (username.isBlank()) {
+      try {
+        username = reader.readLine("User: ");
+      } catch (final Exception e) {
+        chat.close();
+        System.out.println("Exited");
+        return;
+      }
+    }
+
+    try {
+      chat.logIn(username);
+    } catch (final IOException e) {
+      chat.close();
+      System.out.println("Could not log into the chat");
+      return;
+    } catch (final Exception e) {
+      chat.close();
+      System.out.println("Exited");
+      return;
+    }
 
     while (chat.getIsActive()) {
       String prompt;
