@@ -13,6 +13,7 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.concurrent.TimeoutException;
 import org.jline.reader.EndOfFileException;
+import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
 import org.jline.reader.UserInterruptException;
 import org.jline.terminal.TerminalBuilder;
@@ -35,6 +36,7 @@ public class Main {
 
     final var READER = LineReaderBuilder.builder()
       .terminal(TerminalBuilder.terminal())
+      .option(LineReader.Option.DISABLE_EVENT_EXPANSION, true)
       .build();
 
     final var chat = new Chat(
