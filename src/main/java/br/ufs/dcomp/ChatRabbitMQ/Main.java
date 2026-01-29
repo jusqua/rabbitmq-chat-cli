@@ -24,13 +24,13 @@ public class Main {
     throws IOException, TimeoutException, URISyntaxException {
     var env = Dotenv.configure().ignoreIfMissing().load();
 
-    final var HOST = env.get("HOST", "localhost");
-    final var VHOST = env.get("VHOST", "/");
-    final var PORT = env.get("PORT", "15672");
-    final var USER = env.get("RABBIT_USER", "guest");
-    final var PASSWORD = env.get("RABBIT_PASSWORD", "guest");
-    final var FOLDER = env.get(
-      "FOLDER",
+    final var RABBITMQ_HOST = env.get("RABBITMQ_HOST", "localhost");
+    final var RABBITMQ_VHOST = env.get("RABBITMQ_VHOST", "/");
+    final var RABBITMQ_PORT = env.get("RABBITMQ_PORT", "15672");
+    final var RABBITMQ_USER = env.get("RABBITMQ_USER", "guest");
+    final var RABBITMQ_PASSWORD = env.get("RABBITMQ_PASSWORD", "guest");
+    final var CHAT_DOWNLOAD_FOLDER = env.get(
+      "CHAT_DOWNLOAD_FOLDER",
       Paths.get(System.getProperty("user.home"), "Downloads").toString()
     );
 
@@ -40,11 +40,11 @@ public class Main {
       .build();
 
     final var chat = new Chat(
-      HOST,
-      VHOST,
-      PORT,
-      USER,
-      PASSWORD,
+      RABBITMQ_HOST,
+      RABBITMQ_VHOST,
+      RABBITMQ_PORT,
+      RABBITMQ_USER,
+      RABBITMQ_PASSWORD,
       (channel, username) ->
         new DefaultConsumer(channel) {
           public void handleDelivery(
@@ -78,7 +78,7 @@ public class Main {
 
               if (message.hasType() && message.hasFilename()) {
                 Files.write(
-                  Path.of(FOLDER, message.getFilename()),
+                  Path.of(CHAT_DOWNLOAD_FOLDER, message.getFilename()),
                   message.getBody().toByteArray()
                 );
                 READER.printAbove(
