@@ -12,7 +12,7 @@ public class ChatCommandHandler {
     this.commandMap = new HashMap<String, ChatCommand>();
     this.simpleCommandMap = new HashMap<Character, ChatSimpleCommand>();
     DEFAULT_COMMAND = new ChatSimpleCommand(
-      new String[] {},
+      new String[] { ChatSymbol.VARARG_TEXT },
       "Used when command does not find the keyword",
       args -> {
         System.err.printf("\"%s\" is not a valid command\n", args[0]);
